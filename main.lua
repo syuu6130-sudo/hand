@@ -2,8 +2,8 @@
 -- SETTINGS
 -- =============================================
 local control = "pc" -- "pc" or "mobile"
-local sensitivity = 1.2
-local lerpSpeed = 0.12
+local sensitivity = 1.2 -- 腕感度
+local lerpSpeed = 0.12 -- 補間速度
 
 -- =============================================
 -- SERVICES
@@ -16,10 +16,6 @@ local player = Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 local humanoid = character:WaitForChild("Humanoid")
 
--- Animator削除（腕C0制御用）
-local animator = humanoid:FindFirstChildOfClass("Animator")
-if animator then animator:Destroy() end
-
 -- =============================================
 -- ARM REFERENCES
 -- =============================================
@@ -28,11 +24,11 @@ local function getArmJoints(char, side)
     local lower = char:FindFirstChild(side.."LowerArm")
     local hand = char:FindFirstChild(side.."Hand")
     if upper and lower and hand then
-        local joints = {}
-        joints.Upper = upper:FindFirstChildOfClass("Motor6D")
-        joints.Lower = lower:FindFirstChildOfClass("Motor6D")
-        joints.Hand = hand:FindFirstChildOfClass("Motor6D")
-        return joints
+        return {
+            Upper = upper:FindFirstChild(side.."Shoulder"),
+            Lower = lower:FindFirstChild(side.."Elbow"),
+            Hand = hand:FindFirstChild(side.."Wrist")
+        }
     end
 end
 
@@ -42,14 +38,14 @@ local leftJoints = getArmJoints(character,"Left")
 -- 初期C0保持
 local initC0 = {}
 if rightJoints then
-    initC0.RightShoulder = rightJoints.Upper and rightJoints.Upper.C0 or CFrame.new()
-    initC0.RightElbow = rightJoints.Lower and rightJoints.Lower.C0 or CFrame.new()
-    initC0.RightWrist = rightJoints.Hand and rightJoints.Hand.C0 or CFrame.new()
+    initC0.RightShoulder = rightJoints.Upper.C0
+    initC0.RightElbow = rightJoints.Lower.C0
+    initC0.RightWrist = rightJoints.Hand.C0
 end
 if leftJoints then
-    initC0.LeftShoulder = leftJoints.Upper and leftJoints.Upper.C0 or CFrame.new()
-    initC0.LeftElbow = leftJoints.Lower and leftJoints.Lower.C0 or CFrame.new()
-    initC0.LeftWrist = leftJoints.Hand and leftJoints.Hand.C0 or CFrame.new()
+    initC0.LeftShoulder = leftJoints.Upper.C0
+    initC0.LeftElbow = leftJoints.Lower.C0
+    initC0.LeftWrist = leftJoints.Hand.C0
 end
 
 -- =============================================
@@ -58,6 +54,7 @@ end
 local rightInput = Vector2.zero
 local leftInput = Vector2.zero
 
+-- PCマウス操作
 if control == "pc" then
     local lastPos = UserInputService:GetMouseLocation()
     RunService.RenderStepped:Connect(function()
@@ -72,15 +69,7 @@ end
 -- MOBILE STICKS
 -- =============================================
 if control == "mobile" then
-    local playerGui = player:WaitForChild("PlayerGui",5)
-    if not playerGui then
-        warn("PlayerGuiが取得できずモバイル操作無効")
-        return
-    end
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Parent = playerGui
-    screenGui.ResetOnSpawn = false
-
+    local screenGui = Instance.new("ScreenGui", player:WaitForChild("PlayerGui"))
     local function createStick(side)
         local frame = Instance.new("Frame")
         frame.Size = UDim2.new(0,120,0,120)
@@ -108,7 +97,6 @@ if control == "mobile" then
     local function stickHandler(stick, frame, updateFunc)
         local dragging = false
         local center = stick.Position
-
         stick.InputBegan:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.Touch then dragging = true end
         end)
@@ -136,29 +124,24 @@ if control == "mobile" then
 end
 
 -- =============================================
--- UPDATE LOOP (VR風腕)
+-- UPDATE LOOP (VR風腕 + 他プレイヤー見せかけ同期)
 -- =============================================
 local function updateArm(joints, input, init)
     if not joints then return end
     local pitch = -input.Y*sensitivity
     local yaw = input.X*sensitivity
 
-    if joints.Upper then
-        joints.Upper.C0 = joints.Upper.C0:Lerp(init.Upper * CFrame.Angles(pitch, yaw, 0) * CFrame.new(0,0,-0.2), lerpSpeed)
-    end
-    if joints.Lower then
-        joints.Lower.C0 = joints.Lower.C0:Lerp(init.Lower * CFrame.Angles(pitch/2, yaw/2,0), lerpSpeed)
-    end
-    if joints.Hand then
-        joints.Hand.C0 = joints.Hand.C0:Lerp(init.Hand * CFrame.Angles(pitch/3, yaw/3,0), lerpSpeed)
-    end
+    joints.Upper.C0 = joints.Upper.C0:Lerp(init.Upper * CFrame.Angles(pitch, yaw, 0) * CFrame.new(0,0,-0.2), lerpSpeed)
+    joints.Lower.C0 = joints.Lower.C0:Lerp(init.Lower * CFrame.Angles(pitch/2, yaw/2,0), lerpSpeed)
+    joints.Hand.C0 = joints.Hand.C0:Lerp(init.Hand * CFrame.Angles(pitch/3, yaw/3,0), lerpSpeed)
 end
 
 RunService.RenderStepped:Connect(function()
+    -- 自分の腕
     updateArm(rightJoints, rightInput, {Upper=initC0.RightShoulder,Lower=initC0.RightElbow,Hand=initC0.RightWrist})
     updateArm(leftJoints, leftInput, {Upper=initC0.LeftShoulder,Lower=initC0.LeftElbow,Hand=initC0.LeftWrist})
 
-    -- 他プレイヤー（自分の画面上だけ）
+    -- 他プレイヤーの腕（自分の画面上だけ）
     for _, plr in pairs(Players:GetPlayers()) do
         if plr ~= player and plr.Character then
             local rJ = getArmJoints(plr.Character,"Right")
@@ -170,32 +153,8 @@ RunService.RenderStepped:Connect(function()
 end)
 
 -- =============================================
--- PERMANENT DEATH OFF
+-- PERMANENT DEATH OFF（任意）
 -- =============================================
 humanoid.HealthChanged:Connect(function(h)
     if h <= 0 then humanoid.Health = humanoid.MaxHealth end
-end)
-
--- =============================================
--- CHARACTER REGEN HANDLER
--- =============================================
-player.CharacterAdded:Connect(function(char)
-    character = char
-    humanoid = char:WaitForChild("Humanoid")
-    animator = humanoid:FindFirstChildOfClass("Animator")
-    if animator then animator:Destroy() end
-
-    rightJoints = getArmJoints(character,"Right")
-    leftJoints = getArmJoints(character,"Left")
-
-    if rightJoints then
-        initC0.RightShoulder = rightJoints.Upper and rightJoints.Upper.C0 or CFrame.new()
-        initC0.RightElbow = rightJoints.Lower and rightJoints.Lower.C0 or CFrame.new()
-        initC0.RightWrist = rightJoints.Hand and rightJoints.Hand.C0 or CFrame.new()
-    end
-    if leftJoints then
-        initC0.LeftShoulder = leftJoints.Upper and leftJoints.Upper.C0 or CFrame.new()
-        initC0.LeftElbow = leftJoints.Lower and leftJoints.Lower.C0 or CFrame.new()
-        initC0.LeftWrist = leftJoints.Hand and leftJoints.Hand.C0 or CFrame.new()
-    end
 end)
