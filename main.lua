@@ -1,4 +1,15 @@
 -- =============================================
+-- VR ARM CONTROLLER WITH RAYFIELD UI
+-- Executor Ready Script
+-- =============================================
+
+-- Wait for character
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+repeat wait() until character:FindFirstChild("HumanoidRootPart")
+
+-- =============================================
 -- RAYFIELD UI LIBRARY
 -- =============================================
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
@@ -8,9 +19,7 @@ local Window = Rayfield:CreateWindow({
    LoadingTitle = "VR Arm System",
    LoadingSubtitle = "by Assistant",
    ConfigurationSaving = {
-      Enabled = true,
-      FolderName = "VRArmConfig",
-      FileName = "VRArm"
+      Enabled = false,
    },
    Discord = {
       Enabled = false,
@@ -19,25 +28,20 @@ local Window = Rayfield:CreateWindow({
 })
 
 -- =============================================
--- SETTINGS (変更可能)
+-- SERVICES
+-- =============================================
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+-- =============================================
+-- SETTINGS
 -- =============================================
 local Settings = {
-    controlMode = "pc", -- "pc" or "mobile"
+    controlMode = "mobile", -- Default to mobile for testing
     sensitivity = 1.2,
     lerpSpeed = 0.12,
     enabled = true
 }
-
--- =============================================
--- SERVICES
--- =============================================
-local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-
-local player = Players.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
-local humanoid = character:WaitForChild("Humanoid")
 
 -- =============================================
 -- ARM REFERENCES
@@ -46,17 +50,22 @@ local function getArmJoints(char, side)
     local upper = char:FindFirstChild(side.."UpperArm")
     local lower = char:FindFirstChild(side.."LowerArm")
     local hand = char:FindFirstChild(side.."Hand")
-    if upper and lower and hand then
-        local shoulder = upper:FindFirstChild(side.."Shoulder")
-        local elbow = lower:FindFirstChild(side.."Elbow")
-        local wrist = hand:FindFirstChild(side.."Wrist")
-        if shoulder and elbow and wrist then
-            return {
-                Upper = shoulder,
-                Lower = elbow,
-                Hand = wrist
-            }
-        end
+    
+    if not upper or not lower or not hand then
+        warn("R15 body parts not found. Make sure you're using R15 avatar.")
+        return nil
+    end
+    
+    local shoulder = upper:FindFirstChild(side.."Shoulder")
+    local elbow = lower:FindFirstChild(side.."Elbow")
+    local wrist = hand:FindFirstChild(side.."Wrist")
+    
+    if shoulder and elbow and wrist then
+        return {
+            Upper = shoulder,
+            Lower = elbow,
+            Hand = wrist
+        }
     end
     return nil
 end
@@ -64,7 +73,16 @@ end
 local rightJoints = getArmJoints(character, "Right")
 local leftJoints = getArmJoints(character, "Left")
 
--- 初期C0保持
+if not rightJoints or not leftJoints then
+    Rayfield:Notify({
+       Title = "Error",
+       Content = "R15 avatar required! Script may not work properly.",
+       Duration = 10,
+       Image = 4483362458,
+    })
+end
+
+-- Store initial C0
 local initC0 = {}
 if rightJoints then
     initC0.RightShoulder = rightJoints.Upper.C0
@@ -78,368 +96,318 @@ if leftJoints then
 end
 
 -- =============================================
--- INPUT SETUP
+-- INPUT VARIABLES
 -- =============================================
 local rightInput = Vector2.zero
 local leftInput = Vector2.zero
-local rightInputTarget = Vector2.zero
-local leftInputTarget = Vector2.zero
 
--- PCマウス操作
+-- =============================================
+-- MOBILE VIRTUAL STICKS
+-- =============================================
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "VRArmSticks"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.IgnoreGuiInset = true
+screenGui.Parent = game:GetService("CoreGui") -- Use CoreGui for executor compatibility
+
+local function createVirtualStick(position, labelText, side)
+    -- Container Frame
+    local container = Instance.new("Frame")
+    container.Size = UDim2.new(0, 150, 0, 150)
+    container.Position = position
+    container.AnchorPoint = Vector2.new(0.5, 0.5)
+    container.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    container.BackgroundTransparency = 0.3
+    container.BorderSizePixel = 0
+    container.Parent = screenGui
+    
+    local containerCorner = Instance.new("UICorner")
+    containerCorner.CornerRadius = UDim.new(1, 0)
+    containerCorner.Parent = container
+    
+    -- Label
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 0.25, 0)
+    label.Position = UDim2.new(0.5, 0, -0.35, 0)
+    label.AnchorPoint = Vector2.new(0.5, 0.5)
+    label.BackgroundTransparency = 1
+    label.Text = labelText
+    label.TextColor3 = Color3.fromRGB(255, 255, 255)
+    label.TextSize = 18
+    label.Font = Enum.Font.GothamBold
+    label.Parent = container
+    
+    -- Stick
+    local stick = Instance.new("Frame")
+    stick.Size = UDim2.new(0, 70, 0, 70)
+    stick.Position = UDim2.new(0.5, 0, 0.5, 0)
+    stick.AnchorPoint = Vector2.new(0.5, 0.5)
+    stick.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    stick.BackgroundTransparency = 0.2
+    stick.BorderSizePixel = 0
+    stick.Parent = container
+    
+    local stickCorner = Instance.new("UICorner")
+    stickCorner.CornerRadius = UDim.new(1, 0)
+    stickCorner.Parent = stick
+    
+    -- Touch detection
+    local touching = false
+    local centerPos = UDim2.new(0.5, 0, 0.5, 0)
+    
+    local function resetStick()
+        stick.Position = centerPos
+        if side == "left" then
+            leftInput = Vector2.zero
+        else
+            rightInput = Vector2.zero
+        end
+    end
+    
+    local function updateStick(inputPosition)
+        if not touching then return end
+        
+        -- Calculate offset from center
+        local containerCenter = container.AbsolutePosition + container.AbsoluteSize / 2
+        local offset = Vector2.new(
+            inputPosition.X - containerCenter.X,
+            inputPosition.Y - containerCenter.Y
+        )
+        
+        -- Limit to circle
+        local maxRadius = container.AbsoluteSize.X / 2 - 35
+        local distance = math.min(offset.Magnitude, maxRadius)
+        local angle = math.atan2(offset.Y, offset.X)
+        
+        local finalOffset = Vector2.new(
+            math.cos(angle) * distance,
+            math.sin(angle) * distance
+        )
+        
+        -- Update stick position
+        stick.Position = UDim2.new(0.5, finalOffset.X, 0.5, finalOffset.Y)
+        
+        -- Update input (normalized -1 to 1)
+        local normalizedInput = finalOffset / maxRadius
+        if side == "left" then
+            leftInput = normalizedInput
+        else
+            rightInput = normalizedInput
+        end
+    end
+    
+    -- Input handling
+    container.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or 
+           input.UserInputType == Enum.UserInputType.MouseButton1 then
+            touching = true
+            updateStick(input.Position)
+        end
+    end)
+    
+    container.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or 
+           input.UserInputType == Enum.UserInputType.MouseButton1 then
+            touching = false
+            resetStick()
+        end
+    end)
+    
+    container.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or
+           input.UserInputType == Enum.UserInputType.Touch then
+            if touching then
+                updateStick(input.Position)
+            end
+        end
+    end)
+    
+    return container
+end
+
+-- Create sticks
+local leftStickFrame
+local rightStickFrame
+
+local function showSticks()
+    if leftStickFrame then leftStickFrame:Destroy() end
+    if rightStickFrame then rightStickFrame:Destroy() end
+    
+    leftStickFrame = createVirtualStick(
+        UDim2.new(0.15, 0, 0.75, 0),
+        "LEFT ARM",
+        "left"
+    )
+    
+    rightStickFrame = createVirtualStick(
+        UDim2.new(0.85, 0, 0.75, 0),
+        "RIGHT ARM",
+        "right"
+    )
+end
+
+local function hideSticks()
+    if leftStickFrame then leftStickFrame:Destroy() end
+    if rightStickFrame then rightStickFrame:Destroy() end
+    leftInput = Vector2.zero
+    rightInput = Vector2.zero
+end
+
+-- =============================================
+-- PC MOUSE CONTROL
+-- =============================================
 local pcConnection
 local function setupPCControl()
     if pcConnection then pcConnection:Disconnect() end
-    
-    if Settings.controlMode ~= "pc" then return end
     
     local lastPos = UserInputService:GetMouseLocation()
     pcConnection = RunService.RenderStepped:Connect(function()
         if Settings.controlMode == "pc" and Settings.enabled then
             local mousePos = UserInputService:GetMouseLocation()
             local delta = (mousePos - lastPos) * 0.005
-            -- PC mode: both arms follow mouse
-            rightInputTarget = Vector2.new(delta.X, delta.Y)
-            leftInputTarget = Vector2.new(delta.X, delta.Y)
+            rightInput = Vector2.new(delta.X, delta.Y)
+            leftInput = Vector2.new(delta.X, delta.Y)
             lastPos = mousePos
-        else
-            rightInputTarget = Vector2.zero
-            leftInputTarget = Vector2.zero
         end
     end)
 end
 
 -- =============================================
--- MOBILE STICKS
--- =============================================
-local screenGui
-local leftStickActive = false
-local rightStickActive = false
-
-local function setupMobileControl()
-    -- Clean up previous GUI
-    if screenGui then
-        screenGui:Destroy()
-    end
-    
-    if Settings.controlMode ~= "mobile" then 
-        leftInputTarget = Vector2.zero
-        rightInputTarget = Vector2.zero
-        return 
-    end
-    
-    screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "VRArmSticks"
-    screenGui.ResetOnSpawn = false
-    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    screenGui.Parent = player:WaitForChild("PlayerGui")
-    
-    local function createStick(side)
-        local frame = Instance.new("Frame")
-        frame.Size = UDim2.new(0, 120, 0, 120)
-        frame.AnchorPoint = Vector2.new(0.5, 0.5)
-        frame.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-        frame.BackgroundTransparency = 0.5
-        frame.BorderSizePixel = 0
-        frame.ZIndex = 10
-        frame.Parent = screenGui
-        frame.Position = side == "left" and UDim2.new(0.15, 0, 0.75, 0) or UDim2.new(0.85, 0, 0.75, 0)
-        
-        local corner = Instance.new("UICorner", frame)
-        corner.CornerRadius = UDim.new(1, 0)
-
-        local stick = Instance.new("ImageButton")
-        stick.Size = UDim2.new(0, 60, 0, 60)
-        stick.Position = UDim2.new(0.5, 0, 0.5, 0)
-        stick.AnchorPoint = Vector2.new(0.5, 0.5)
-        stick.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-        stick.BackgroundTransparency = 0.3
-        stick.BorderSizePixel = 0
-        stick.AutoButtonColor = false
-        stick.ZIndex = 11
-        stick.Parent = frame
-        
-        local stickCorner = Instance.new("UICorner", stick)
-        stickCorner.CornerRadius = UDim.new(1, 0)
-        
-        local label = Instance.new("TextLabel")
-        label.Size = UDim2.new(1, 0, 0.3, 0)
-        label.Position = UDim2.new(0.5, 0, -0.4, 0)
-        label.AnchorPoint = Vector2.new(0.5, 0.5)
-        label.BackgroundTransparency = 1
-        label.Text = side == "left" and "Left Arm" or "Right Arm"
-        label.TextColor3 = Color3.fromRGB(255, 255, 255)
-        label.TextScaled = true
-        label.Font = Enum.Font.GothamBold
-        label.ZIndex = 12
-        label.Parent = frame
-
-        return frame, stick
-    end
-
-    local leftFrame, leftStick = createStick("left")
-    local rightFrame, rightStick = createStick("right")
-
-    local function stickHandler(stick, frame, side)
-        local dragging = false
-        local center = UDim2.new(0.5, 0, 0.5, 0)
-        local inputConnection
-        
-        stick.MouseButton1Down:Connect(function()
-            dragging = true
-            if side == "left" then
-                leftStickActive = true
-            else
-                rightStickActive = true
-            end
-        end)
-        
-        stick.MouseButton1Up:Connect(function()
-            dragging = false
-            stick.Position = center
-            if side == "left" then
-                leftStickActive = false
-                leftInputTarget = Vector2.zero
-            else
-                rightStickActive = false
-                rightInputTarget = Vector2.zero
-            end
-        end)
-        
-        stick.TouchTap:Connect(function()
-            -- Touch started
-        end)
-        
-        stick.TouchLongPress:Connect(function()
-            -- Long press
-        end)
-        
-        local function updateStickPosition(inputPos)
-            if not dragging then return end
-            
-            local framePos = frame.AbsolutePosition
-            local frameSize = frame.AbsoluteSize
-            local center = framePos + frameSize / 2
-            
-            local offset = Vector2.new(inputPos.X - center.X, inputPos.Y - center.Y)
-            local maxDist = frameSize.X / 2 - 30
-            
-            local magnitude = offset.Magnitude
-            if magnitude > maxDist then
-                offset = offset.Unit * maxDist
-            end
-            
-            stick.Position = UDim2.new(0.5, offset.X, 0.5, offset.Y)
-            
-            -- Update input for the specific arm
-            local normalizedInput = offset / maxDist
-            if side == "left" then
-                leftInputTarget = normalizedInput
-            else
-                rightInputTarget = normalizedInput
-            end
-        end
-        
-        -- Mouse support (for testing in Studio)
-        UserInputService.InputChanged:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseMovement and dragging then
-                updateStickPosition(Vector2.new(input.Position.X, input.Position.Y))
-            end
-        end)
-        
-        -- Touch support
-        stick.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.Touch then
-                dragging = true
-                if side == "left" then
-                    leftStickActive = true
-                else
-                    rightStickActive = true
-                end
-            end
-        end)
-        
-        stick.InputEnded:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.Touch then
-                dragging = false
-                stick.Position = center
-                if side == "left" then
-                    leftStickActive = false
-                    leftInputTarget = Vector2.zero
-                else
-                    rightStickActive = false
-                    rightInputTarget = Vector2.zero
-                end
-            end
-        end)
-        
-        stick.InputChanged:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.Touch and dragging then
-                updateStickPosition(Vector2.new(input.Position.X, input.Position.Y))
-            end
-        end)
-    end
-
-    stickHandler(leftStick, leftFrame, "left")
-    stickHandler(rightStick, rightFrame, "right")
-end
-
--- =============================================
--- UPDATE LOOP
+-- ARM UPDATE FUNCTION
 -- =============================================
 local function updateArm(joints, input, init)
     if not joints or not Settings.enabled then return end
     
     local pitch = -input.Y * Settings.sensitivity
     local yaw = input.X * Settings.sensitivity
-
+    
     joints.Upper.C0 = joints.Upper.C0:Lerp(
-        init.Upper * CFrame.Angles(pitch, yaw, 0) * CFrame.new(0, 0, -0.2), 
+        init.Upper * CFrame.Angles(pitch, yaw, 0) * CFrame.new(0, 0, -0.2),
         Settings.lerpSpeed
     )
     joints.Lower.C0 = joints.Lower.C0:Lerp(
-        init.Lower * CFrame.Angles(pitch / 2, yaw / 2, 0), 
+        init.Lower * CFrame.Angles(pitch / 2, yaw / 2, 0),
         Settings.lerpSpeed
     )
     joints.Hand.C0 = joints.Hand.C0:Lerp(
-        init.Hand * CFrame.Angles(pitch / 3, yaw / 3, 0), 
+        init.Hand * CFrame.Angles(pitch / 3, yaw / 3, 0),
         Settings.lerpSpeed
     )
 end
 
--- Smooth input interpolation
-RunService.Heartbeat:Connect(function()
-    -- Smooth input transitions
-    rightInput = rightInput:Lerp(rightInputTarget, 0.3)
-    leftInput = leftInput:Lerp(leftInputTarget, 0.3)
-end)
-
+-- Main update loop
 RunService.RenderStepped:Connect(function()
-    if not Settings.enabled then return end
-    
-    if rightJoints and initC0.RightShoulder then
-        updateArm(rightJoints, rightInput, {
-            Upper = initC0.RightShoulder,
-            Lower = initC0.RightElbow,
-            Hand = initC0.RightWrist
-        })
-    end
-    
-    if leftJoints and initC0.LeftShoulder then
-        updateArm(leftJoints, leftInput, {
-            Upper = initC0.LeftShoulder,
-            Lower = initC0.LeftElbow,
-            Hand = initC0.LeftWrist
-        })
+    if Settings.enabled then
+        if rightJoints and initC0.RightShoulder then
+            updateArm(rightJoints, rightInput, {
+                Upper = initC0.RightShoulder,
+                Lower = initC0.RightElbow,
+                Hand = initC0.RightWrist
+            })
+        end
+        
+        if leftJoints and initC0.LeftShoulder then
+            updateArm(leftJoints, leftInput, {
+                Upper = initC0.LeftShoulder,
+                Lower = initC0.LeftElbow,
+                Hand = initC0.LeftWrist
+            })
+        end
     end
 end)
 
 -- =============================================
--- RAYFIELD UI TABS
+-- RAYFIELD UI
 -- =============================================
-local MainTab = Window:CreateTab("🎮 Main Controls", nil)
+local MainTab = Window:CreateTab("🎮 Controls", nil)
 local SettingsTab = Window:CreateTab("⚙️ Settings", nil)
 
--- Main Controls
-local EnableToggle = MainTab:CreateToggle({
+-- Enable Toggle
+MainTab:CreateToggle({
    Name = "Enable VR Arms",
    CurrentValue = Settings.enabled,
-   Flag = "EnableVR",
    Callback = function(Value)
       Settings.enabled = Value
       if not Value then
-         -- Reset arms to default
-         rightInputTarget = Vector2.zero
-         leftInputTarget = Vector2.zero
+         leftInput = Vector2.zero
+         rightInput = Vector2.zero
       end
-      Rayfield:Notify({
-         Title = Value and "VR Arms Enabled" or "VR Arms Disabled",
-         Content = Value and "Arms are now controllable" or "Arms reset to normal",
-         Duration = 3,
-         Image = 4483362458,
-      })
    end,
 })
 
-local ControlDropdown = MainTab:CreateDropdown({
+-- Control Mode
+MainTab:CreateDropdown({
    Name = "Control Mode",
-   Options = {"pc", "mobile"},
+   Options = {"mobile", "pc"},
    CurrentOption = Settings.controlMode,
-   Flag = "ControlMode",
    Callback = function(Option)
       Settings.controlMode = Option:lower()
       
-      -- Reset inputs
-      rightInputTarget = Vector2.zero
-      leftInputTarget = Vector2.zero
+      leftInput = Vector2.zero
+      rightInput = Vector2.zero
       
-      if Settings.controlMode == "pc" then
-         setupPCControl()
-         if screenGui then screenGui:Destroy() end
-      else
+      if Settings.controlMode == "mobile" then
+         hideSticks()
+         wait(0.1)
+         showSticks()
          if pcConnection then pcConnection:Disconnect() end
-         setupMobileControl()
+         Rayfield:Notify({
+            Title = "Mobile Mode",
+            Content = "Virtual sticks are now visible!",
+            Duration = 3,
+            Image = 4483362458,
+         })
+      else
+         hideSticks()
+         setupPCControl()
+         Rayfield:Notify({
+            Title = "PC Mode",
+            Content = "Move mouse to control arms",
+            Duration = 3,
+            Image = 4483362458,
+         })
       end
-      
-      Rayfield:Notify({
-         Title = "Control Mode Changed",
-         Content = "Now using " .. Option .. " controls",
-         Duration = 3,
-         Image = 4483362458,
-      })
    end,
 })
 
--- Settings Tab
-local SensitivitySlider = SettingsTab:CreateSlider({
+-- Sensitivity
+SettingsTab:CreateSlider({
    Name = "Sensitivity",
-   Range = {0.1, 3},
+   Range = {0.1, 5},
    Increment = 0.1,
    CurrentValue = Settings.sensitivity,
-   Flag = "Sensitivity",
    Callback = function(Value)
       Settings.sensitivity = Value
    end,
 })
 
-local LerpSpeedSlider = SettingsTab:CreateSlider({
-   Name = "Smoothness (Lerp Speed)",
+-- Smoothness
+SettingsTab:CreateSlider({
+   Name = "Smoothness",
    Range = {0.01, 0.5},
    Increment = 0.01,
    CurrentValue = Settings.lerpSpeed,
-   Flag = "LerpSpeed",
    Callback = function(Value)
       Settings.lerpSpeed = Value
    end,
 })
 
-local ResetButton = SettingsTab:CreateButton({
-   Name = "Reset to Default",
-   Callback = function()
-      Settings.sensitivity = 1.2
-      Settings.lerpSpeed = 0.12
-      SensitivitySlider:Set(1.2)
-      LerpSpeedSlider:Set(0.12)
-      Rayfield:Notify({
-         Title = "Settings Reset",
-         Content = "All settings restored to default",
-         Duration = 3,
-         Image = 4483362458,
-      })
-   end,
-})
-
 -- =============================================
--- INITIAL SETUP
+-- INITIALIZE
 -- =============================================
-if Settings.controlMode == "pc" then
-    setupPCControl()
+if Settings.controlMode == "mobile" then
+    showSticks()
 else
-    setupMobileControl()
+    setupPCControl()
 end
 
 Rayfield:Notify({
-   Title = "VR Arm Controller Loaded",
-   Content = "Use the UI to configure your settings",
+   Title = "VR Arm Controller Loaded!",
+   Content = "Check the UI to change settings",
    Duration = 5,
    Image = 4483362458,
 })
+
+print("VR Arm Controller loaded successfully!")
+print("Current mode:", Settings.controlMode)
